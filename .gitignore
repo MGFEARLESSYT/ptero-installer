@@ -1,6 +1,5 @@
 *.log
 .env
 .env.*
-/etc/pterodactyl/config.yml
-*.key
 *.pem
+*.key

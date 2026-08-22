@@ -1,6 +1,6 @@
-# Pterodactyl All-in-One Installer
+# MG Ptero Installer v2
 
-A GitHub-ready installer for a fresh Pterodactyl server.
+A GitHub-ready interactive Bash deployment and management panel for Pterodactyl.
 
 ## Supported OS
 
@@ -8,95 +8,83 @@ A GitHub-ready installer for a fresh Pterodactyl server.
 - Ubuntu 24.04
 - Debian 12
 
-## Installs
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MGFEARLESSYT/ptero-installer/main/install.sh | bash
+```
+
+## Menu
+
+### Installation
+- Install Panel
+- Install Wings
+- Install Panel + Wings
+
+### Management
+- Update Panel
+- Update Wings
+- Backup Panel + Database
+- Repair Panel
+- SSL Manager
+- Service Status
+- View Logs
+- Uninstall / Remove
+
+## Components
 
 - Pterodactyl Panel
 - Pterodactyl Wings
 - Docker
-- Nginx
 - MariaDB
 - Redis
+- Nginx
 - PHP 8.3
 - Composer
-- Certbot / Let's Encrypt
+- Let's Encrypt / Certbot
 - Queue Worker
 - Scheduler
 
-## Install
+## Backup
 
-Clone the repository:
+Backups are stored under:
 
-```bash
-git clone https://github.com/MGFEARLESSYT/pterodactyl-installer.git
-cd pterodactyl-installer
-chmod +x install.sh
-sudo ./install.sh
+```text
+/var/backups/mg-ptero/
 ```
 
-Or:
+Installer log:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/MGFEARLESSYT/pterodactyl-installer/main/install.sh | sudo bash
+```text
+/var/log/mg-ptero-installer.log
 ```
 
 ## DNS
 
-Before SSL, point:
+Before requesting SSL:
 
 ```text
 panel.example.com -> SERVER_IP
 node.example.com  -> SERVER_IP
 ```
 
-For Cloudflare, use **DNS Only** while obtaining the first Let's Encrypt certificate.
+For Cloudflare, DNS must resolve correctly to the server. Do not proxy Wings through Cloudflare unless your specific Wings networking setup supports it.
 
-## After installation
+## Important
 
-The Panel and Wings packages are installed automatically.
+The installer is intended for a clean server. Always keep an independent backup before performing major upgrades or uninstall operations.
 
-A Pterodactyl Node still needs to be created from the Panel because allocations and node configuration are environment-specific.
+After creating a Node in Pterodactyl, put its generated Wings configuration at:
 
-Go to:
-
-**Admin → Locations → Nodes → Create New**
-
-Set the node FQDN to your node domain.
-
-Then copy the generated configuration into:
-
-```bash
+```text
 /etc/pterodactyl/config.yml
 ```
 
-Start Wings:
+Then:
 
 ```bash
-systemctl enable --now wings
+systemctl restart wings
 ```
 
-## Useful commands
 
-```bash
-systemctl status wings
-systemctl status nginx
-systemctl status mariadb
-systemctl status redis-server
-systemctl status docker
-systemctl status pterodactyl-worker
-```
-
-Wings logs:
-
-```bash
-journalctl -u wings -f
-```
-
-Panel logs:
-
-```bash
-tail -f /var/www/pterodactyl/storage/logs/*.log
-```
-
-## Warning
-
-Use this on a clean server and review the script before production deployment. Do not expose MariaDB or Redis directly to the public internet.
+The installer keeps menu input attached to `/dev/tty`, so the interactive menu works when launched with `curl | bash`.
