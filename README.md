@@ -1,4 +1,4 @@
-Sure — replace your current `README.md` with this:
+
 
 ````markdown
 # 🚀 MG Ptero Installer
