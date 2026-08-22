@@ -1,90 +1,46 @@
-# MG Ptero Installer v2
+# 🚀 MG Ptero Installer
 
-A GitHub-ready interactive Bash deployment and management panel for Pterodactyl.
+A powerful, interactive **Pterodactyl Panel & Wings installer and management tool** for Linux servers.
 
-## Supported OS
+Built for easy deployment, updates, backups, repairs, SSL management, and service monitoring.
 
-- Ubuntu 22.04
-- Ubuntu 24.04
-- Debian 12
+---
 
-## Install
+## ✨ Features
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/MGFEARLESSYT/ptero-installer/main/install.sh | bash
-```
+### 📦 Installation
 
-## Menu
-
-### Installation
-- Install Panel
-- Install Wings
+- Install Pterodactyl Panel
+- Install Pterodactyl Wings
 - Install Panel + Wings
-
-### Management
-- Update Panel
-- Update Wings
-- Backup Panel + Database
-- Repair Panel
-- SSL Manager
-- Service Status
-- View Logs
-- Uninstall / Remove
-
-## Components
-
-- Pterodactyl Panel
-- Pterodactyl Wings
-- Docker
-- MariaDB
-- Redis
-- Nginx
-- PHP 8.3
-- Composer
-- Let's Encrypt / Certbot
+- Automatic dependency installation
+- Docker installation
+- MariaDB setup
+- Redis setup
+- PHP 8.3 setup
+- Nginx configuration
+- Composer setup
 - Queue Worker
 - Scheduler
 
-## Backup
+### 🛠️ Management
 
-Backups are stored under:
+- Update Pterodactyl Panel
+- Update Wings
+- Backup Panel files
+- Backup Panel database
+- Repair Panel
+- Clear Laravel caches
+- Restart required services
+- SSL Manager
+- Service Status
+- View Panel/Wings logs
 
-```text
-/var/backups/mg-ptero/
-```
+### 🔐 SSL
 
-Installer log:
+Automatic Let's Encrypt SSL configuration using Certbot.
 
-```text
-/var/log/mg-ptero-installer.log
-```
-
-## DNS
-
-Before requesting SSL:
-
-```text
-panel.example.com -> SERVER_IP
-node.example.com  -> SERVER_IP
-```
-
-For Cloudflare, DNS must resolve correctly to the server. Do not proxy Wings through Cloudflare unless your specific Wings networking setup supports it.
-
-## Important
-
-The installer is intended for a clean server. Always keep an independent backup before performing major upgrades or uninstall operations.
-
-After creating a Node in Pterodactyl, put its generated Wings configuration at:
+The installer can configure:
 
 ```text
-/etc/pterodactyl/config.yml
-```
-
-Then:
-
-```bash
-systemctl restart wings
-```
-
-
-The installer keeps menu input attached to `/dev/tty`, so the interactive menu works when launched with `curl | bash`.
+https://panel.example.com
