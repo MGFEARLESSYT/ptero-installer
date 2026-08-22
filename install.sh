@@ -7,6 +7,11 @@ set -Eeuo pipefail
 # ============================================================
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Keep interactive input attached to the user's terminal when launched with curl | bash.
+if [[ ! -t 0 && -e /dev/tty ]]; then
+  exec </dev/tty
+fi
 LOG="/var/log/mg-ptero-installer.log"
 BACKUP_DIR="/var/backups/mg-ptero"
 mkdir -p "$(dirname "$LOG")" "$BACKUP_DIR"
