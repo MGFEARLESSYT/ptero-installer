@@ -36,7 +36,7 @@ sudo ./install.sh
 Or:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR-USERNAME/pterodactyl-installer/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/MGFEARLESSYT/pterodactyl-installer/main/install.sh | sudo bash
 ```
 
 ## DNS
