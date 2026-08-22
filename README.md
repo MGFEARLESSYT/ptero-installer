@@ -27,7 +27,7 @@ A GitHub-ready installer for a fresh Pterodactyl server.
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/pterodactyl-installer.git
+git clone https://github.com/MGFEARLESSYT/pterodactyl-installer.git
 cd pterodactyl-installer
 chmod +x install.sh
 sudo ./install.sh
