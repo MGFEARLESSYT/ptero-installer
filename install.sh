@@ -2,15 +2,24 @@
 
 # ============================================================
 # MG PTERO INSTALLER
-# Pterodactyl Panel + Wings All-In-One Installer
+# Pterodactyl Deployment Manager
 # ============================================================
 
-set -Eeuo pipefail
+set -o pipefail
 
 VERSION="3.0.0"
 PANEL_DIR="/var/www/pterodactyl"
-BACKUP_DIR="/var/backups/mg-ptero"
 LOG_FILE="/var/log/mg-ptero-installer.log"
+PANEL_URL="https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz"
+WINGS_URL="https://github.com/pterodactyl/wings/releases/latest/download/wings_linux"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+touch "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# ------------------------------------------------------------
+# Colors
+# ------------------------------------------------------------
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -18,85 +27,129 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BLUE='\033[0;34m'
 WHITE='\033[1;37m'
+GRAY='\033[0;90m'
 NC='\033[0m'
 
-mkdir -p "$(dirname "$LOG_FILE")"
-touch "$LOG_FILE"
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
 
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-# ============================================================
-# BASIC FUNCTIONS
-# ============================================================
-
-msg() {
-    echo -e "${CYAN}[MG]${NC} $1"
+pause() {
+    echo
+    read -r -p "Press Enter to continue..."
 }
 
 success() {
     echo -e "${GREEN}[✓]${NC} $1"
 }
 
-warn() {
-    echo -e "${YELLOW}[!]${NC} $1"
-}
-
 error() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
+warn() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+info() {
+    echo -e "${CYAN}[→]${NC} $1"
+}
+
 die() {
     error "$1"
+    echo
+    echo "Log: $LOG_FILE"
     exit 1
 }
 
 step() {
     echo
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${WHITE}$1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
-pause() {
-    echo
-    read -r -p "Press Enter to continue..." _
+ask_yes_no() {
+    local question="$1"
+    local default="$2"
+    local answer
+
+    if [[ "$default" == "Y" ]]; then
+        read -r -p "$question [Y/n]: " answer
+        answer="${answer:-Y}"
+    else
+        read -r -p "$question [y/N]: " answer
+        answer="${answer:-N}"
+    fi
+
+    case "$answer" in
+        y|Y|yes|YES|Yes)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# ============================================================
-# ROOT CHECK
-# ============================================================
+# ------------------------------------------------------------
+# Root check
+# ------------------------------------------------------------
 
-check_root() {
-    if [[ "$EUID" -ne 0 ]]; then
-        die "Run this installer as root."
-    fi
+if [[ "$EUID" -ne 0 ]]; then
+    echo "Run this installer as root."
+    echo
+    echo "Example:"
+    echo "sudo bash install.sh"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Banner
+# ------------------------------------------------------------
+
+banner() {
+    clear
+
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║                                                      ║"
+    echo "║              MG PTERO INSTALLER v${VERSION}              ║"
+    echo "║          Pterodactyl Deployment Manager              ║"
+    echo "║                                                      ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    echo -e "${GRAY}Official Pterodactyl release installer${NC}"
+    echo -e "${GRAY}Log: ${LOG_FILE}${NC}"
+    echo
 }
 
-# ============================================================
-# OS CHECK
-# ============================================================
+# ------------------------------------------------------------
+# OS Detection
+# ------------------------------------------------------------
 
-check_os() {
+detect_os() {
+    step "System Check"
 
     if [[ ! -f /etc/os-release ]]; then
-        die "Cannot detect operating system."
+        die "Unable to detect operating system."
     fi
 
-    source /etc/os-release
+    . /etc/os-release
 
     OS_ID="$ID"
     OS_VERSION="$VERSION_ID"
 
     case "$OS_ID" in
-
         ubuntu)
             case "$OS_VERSION" in
                 22.04|24.04)
-                    success "Supported OS: Ubuntu $OS_VERSION"
+                    success "Ubuntu $OS_VERSION supported."
                     ;;
                 *)
                     die "Unsupported Ubuntu version: $OS_VERSION"
@@ -107,7 +160,7 @@ check_os() {
         debian)
             case "$OS_VERSION" in
                 12|13)
-                    success "Supported OS: Debian $OS_VERSION"
+                    success "Debian $OS_VERSION supported."
                     ;;
                 *)
                     die "Unsupported Debian version: $OS_VERSION"
@@ -116,236 +169,102 @@ check_os() {
             ;;
 
         *)
-            die "Unsupported operating system: $OS_ID"
+            die "Unsupported operating system: $OS_ID $OS_VERSION"
             ;;
-
     esac
-}
 
-# ============================================================
-# INTERNET CHECK
-# ============================================================
+    ARCH="$(dpkg --print-architecture)"
 
-check_internet() {
-
-    step "Checking Internet Connectivity"
-
-    if ! curl -4fsSL --connect-timeout 10 --max-time 20 \
-        https://www.google.com >/dev/null; then
-
-        die "Internet connection unavailable."
-    fi
-
-    success "Internet connection OK"
-}
-
-# ============================================================
-# PUBLIC IP
-# ============================================================
-
-get_public_ip() {
-
-    PUBLIC_IP=""
-
-    PUBLIC_IP="$(curl -4fsSL \
-        --connect-timeout 10 \
-        --max-time 20 \
-        https://api.ipify.org 2>/dev/null || true)"
-
-    if [[ -z "$PUBLIC_IP" ]]; then
-        PUBLIC_IP="$(curl -4fsSL \
-            --connect-timeout 10 \
-            --max-time 20 \
-            https://ifconfig.me 2>/dev/null || true)"
-    fi
-
-    if [[ -z "$PUBLIC_IP" ]]; then
-        die "Unable to detect public IPv4 address."
-    fi
-}
-
-# ============================================================
-# DOMAIN VALIDATION
-# ============================================================
-
-validate_domain_format() {
-
-    local domain="$1"
-
-    if [[ ! "$domain" =~ ^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$ ]]; then
-        return 1
-    fi
-
-    return 0
-}
-
-check_domain_dns() {
-
-    local domain="$1"
-
-    step "Checking Panel Domain"
-
-    if ! validate_domain_format "$domain"; then
-        error "Invalid domain format."
-        echo
-        echo "Example:"
-        echo "panel.example.com"
-        return 1
-    fi
-
-    success "Domain format valid"
-
-    msg "Resolving $domain..."
-
-    local resolved_ips
-
-    resolved_ips="$(getent ahostsv4 "$domain" 2>/dev/null \
-        | awk '{print $1}' \
-        | sort -u)"
-
-    if [[ -z "$resolved_ips" ]]; then
-
-        error "DNS resolution failed."
-        echo
-        echo "Create an A record:"
-        echo
-        echo "    $domain -> $PUBLIC_IP"
-        echo
-
-        return 1
-    fi
-
-    success "DNS record found"
-
-    echo
-    echo "Resolved IP addresses:"
-    echo "$resolved_ips" | sed 's/^/    /'
-
-    if echo "$resolved_ips" | grep -qx "$PUBLIC_IP"; then
-
-        success "$domain points to this server ($PUBLIC_IP)"
-        return 0
-
-    fi
-
-    echo
-    warn "The domain resolves, but does NOT point directly to this server."
-    echo
-    echo "Server IP:"
-    echo "    $PUBLIC_IP"
-    echo
-    echo "Domain IP:"
-    echo "$resolved_ips" | sed 's/^/    /'
-    echo
-    echo "If you are using Cloudflare proxying, this can be expected."
-    echo
-
-    read -r -p "Continue anyway? [y/N]: " answer
-
-    case "$answer" in
-        y|Y|yes|YES)
-            success "Continuing with resolved domain."
+    case "$ARCH" in
+        amd64|arm64)
+            success "Architecture: $ARCH"
             ;;
         *)
-            return 1
+            die "Unsupported architecture: $ARCH"
             ;;
     esac
 }
 
-# ============================================================
-# PORT CHECK
-# ============================================================
+# ------------------------------------------------------------
+# Internet check
+# ------------------------------------------------------------
 
-check_ports() {
+check_internet() {
+    step "Internet Check"
 
-    step "Checking Required Ports"
-
-    for port in 80 443; do
-
-        if ss -lnt 2>/dev/null | awk '{print $4}' \
-            | grep -Eq "(:|\\])${port}$"; then
-
-            warn "Port $port is currently in use."
-
-        else
-
-            success "Port $port is available"
-
-        fi
-
-    done
+    if curl -fsSL --connect-timeout 8 https://github.com >/dev/null 2>&1; then
+        success "Internet connection available."
+    else
+        die "Unable to reach GitHub."
+    fi
 }
 
-# ============================================================
-# PACKAGE INSTALL
-# ============================================================
+# ------------------------------------------------------------
+# APT
+# ------------------------------------------------------------
+
+apt_update() {
+    step "Updating Package Lists"
+
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update -qq || die "apt update failed."
+
+    success "Package lists updated."
+}
 
 apt_install() {
+    info "Installing required packages..."
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
-}
+    export DEBIAN_FRONTEND=noninteractive
 
-# ============================================================
-# PHP REPOSITORY
-# ============================================================
+    if apt-get install -y \
+        -o Dpkg::Use-Pty=0 \
+        "$@" >>"$LOG_FILE" 2>&1; then
 
-setup_php_repository() {
-
-    step "Configuring PHP Repository"
-
-    apt_install \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        software-properties-common
-
-    if [[ "$OS_ID" == "ubuntu" ]]; then
-
-        if [[ "$OS_VERSION" == "22.04" ]]; then
-
-            add-apt-repository -y ppa:ondrej/php
-            apt-get update -y
-
-        else
-
-            apt-get update -y
-
-        fi
-
-    elif [[ "$OS_ID" == "debian" ]]; then
-
-        apt_install \
-            apt-transport-https \
-            ca-certificates
-
-        install -d -m 0755 /etc/apt/keyrings
-
-        curl -fsSL \
-            https://packages.sury.org/php/apt.gpg \
-            | gpg --dearmor \
-            -o /etc/apt/keyrings/sury-php.gpg
-
-        echo \
-            "deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" \
-            > /etc/apt/sources.list.d/php.list
-
-        apt-get update -y
-
+        success "Packages installed."
+    else
+        error "Package installation failed."
+        echo "Check: $LOG_FILE"
+        return 1
     fi
-
-    success "PHP repository configured"
 }
 
-# ============================================================
-# DEPENDENCIES
-# ============================================================
+# ------------------------------------------------------------
+# Base dependencies
+# ------------------------------------------------------------
 
 install_dependencies() {
+    step "Installing Dependencies"
 
-    step "Installing Pterodactyl Dependencies"
+    apt_install \
+        curl \
+        wget \
+        ca-certificates \
+        gnupg \
+        git \
+        unzip \
+        tar \
+        zip \
+        cron \
+        nginx \
+        mariadb-server \
+        redis-server \
+        software-properties-common \
+        lsb-release \
+        apt-transport-https
 
-    setup_php_repository
+    # PHP repository on Ubuntu
+    if [[ "$OS_ID" == "ubuntu" ]]; then
+        if ! grep -Rqs "ondrej/php" /etc/apt/sources.list.d 2>/dev/null; then
+            info "Adding PHP repository..."
+
+            add-apt-repository -y ppa:ondrej/php \
+                >>"$LOG_FILE" 2>&1 || die "Unable to add PHP repository."
+        fi
+    fi
+
+    apt-get update -qq || die "apt update failed."
 
     apt_install \
         php8.3 \
@@ -358,344 +277,423 @@ install_dependencies() {
         php8.3-xml \
         php8.3-fpm \
         php8.3-curl \
-        php8.3-zip \
-        mariadb-server \
-        nginx \
-        tar \
-        unzip \
-        git \
-        redis-server \
-        ca-certificates \
-        curl \
-        gnupg \
-        cron \
-        certbot \
-        python3-certbot-nginx
+        php8.3-zip
 
-    success "Dependencies installed"
+    systemctl enable --now nginx
+    systemctl enable --now mariadb
+    systemctl enable --now redis-server
+    systemctl enable --now php8.3-fpm
+
+    success "Dependencies installed."
 }
 
-# ============================================================
-# COMPOSER
-# ============================================================
+# ------------------------------------------------------------
+# Composer
+# ------------------------------------------------------------
 
 install_composer() {
-
     step "Installing Composer"
 
     if command_exists composer; then
-
+        success "Composer already installed."
         composer self-update --2 >/dev/null 2>&1 || true
-        success "Composer already installed"
-
-    else
-
-        curl -fsSL https://getcomposer.org/installer \
-            -o /tmp/composer-setup.php
-
-        php /tmp/composer-setup.php \
-            --install-dir=/usr/local/bin \
-            --filename=composer
-
-        rm -f /tmp/composer-setup.php
-
-        success "Composer installed"
-
+        return
     fi
+
+    php -r "copy('https://getcomposer.org/installer', '/tmp/composer-setup.php');"
+
+    php /tmp/composer-setup.php \
+        --install-dir=/usr/local/bin \
+        --filename=composer \
+        >>"$LOG_FILE" 2>&1 || die "Composer installation failed."
+
+    rm -f /tmp/composer-setup.php
+
+    chmod +x /usr/local/bin/composer
+
+    success "Composer installed."
 }
 
-# ============================================================
-# MARIADB
-# ============================================================
+# ------------------------------------------------------------
+# Domain setup
+# ------------------------------------------------------------
+
+configure_domain() {
+    step "Panel Domain"
+
+    echo
+    echo "Enter your panel domain."
+    echo
+    echo "Examples:"
+    echo "  panel.example.com"
+    echo "  ptero.example.com"
+    echo
+    echo "Leave blank to use the server IP."
+    echo
+
+    read -r -p "Panel domain: " PANEL_DOMAIN
+
+    PANEL_DOMAIN="${PANEL_DOMAIN// /}"
+
+    if [[ -z "$PANEL_DOMAIN" ]]; then
+        PANEL_DOMAIN=""
+        warn "No domain supplied."
+        warn "Panel will be configured for HTTP/IP access."
+        return
+    fi
+
+    if [[ ! "$PANEL_DOMAIN" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+        warn "Domain format looks invalid."
+        warn "Continuing without domain."
+        PANEL_DOMAIN=""
+        return
+    fi
+
+    success "Domain: $PANEL_DOMAIN"
+}
+
+# ------------------------------------------------------------
+# DNS verification
+# ------------------------------------------------------------
+
+check_dns() {
+    [[ -z "$PANEL_DOMAIN" ]] && return 1
+
+    step "DNS Verification"
+
+    local server_ip
+    local dns_ips
+
+    server_ip="$(curl -4 -fsSL --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+
+    dns_ips="$(getent ahostsv4 "$PANEL_DOMAIN" 2>/dev/null \
+        | awk '{print $1}' \
+        | sort -u)"
+
+    if [[ -z "$dns_ips" ]]; then
+        error "$PANEL_DOMAIN does not resolve."
+        return 1
+    fi
+
+    echo
+    echo "DNS records:"
+    echo "$dns_ips"
+
+    echo
+
+    if [[ -n "$server_ip" ]] && echo "$dns_ips" | grep -qx "$server_ip"; then
+        success "DNS points to this server."
+        return 0
+    fi
+
+    warn "Domain resolves, but it does not appear to point to this server."
+
+    if [[ -n "$server_ip" ]]; then
+        echo "Server IP: $server_ip"
+    fi
+
+    return 1
+}
+
+# ------------------------------------------------------------
+# Database
+# ------------------------------------------------------------
+
+generate_password() {
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32
+}
 
 setup_database() {
+    step "Database Configuration"
 
-    step "Configuring MariaDB"
-
-    systemctl enable --now mariadb
+    if ! ask_yes_no "Configure MariaDB automatically?" "Y"; then
+        warn "Automatic database setup skipped."
+        return
+    fi
 
     DB_NAME="panel"
     DB_USER="pterodactyl"
+    DB_PASSWORD="$(generate_password)"
 
-    DB_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    echo
+    read -r -p "Database name [panel]: " input
+    [[ -n "$input" ]] && DB_NAME="$input"
 
-    mariadb <<SQL
-CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;
-CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
-ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
-GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
+    read -r -p "Database username [pterodactyl]: " input
+    [[ -n "$input" ]] && DB_USER="$input"
+
+    echo
+    echo "Database password:"
+    echo "$DB_PASSWORD"
+    echo
+
+    if ask_yes_no "Use this generated password?" "Y"; then
+        :
+    else
+        read -r -s -p "Enter database password: " DB_PASSWORD
+        echo
+    fi
+
+    mysql <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`
+CHARACTER SET utf8mb4
+COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1'
+IDENTIFIED BY '${DB_PASSWORD}';
+
+ALTER USER '${DB_USER}'@'127.0.0.1'
+IDENTIFIED BY '${DB_PASSWORD}';
+
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.*
+TO '${DB_USER}'@'127.0.0.1';
+
 FLUSH PRIVILEGES;
 SQL
 
-    success "MariaDB configured"
+    if [[ $? -ne 0 ]]; then
+        die "Database setup failed."
+    fi
+
+    success "Database configured."
+
+    echo
+    echo "Database:"
+    echo "  Name:     $DB_NAME"
+    echo "  User:     $DB_USER"
+    echo "  Password: $DB_PASSWORD"
 }
 
-# ============================================================
-# REDIS
-# ============================================================
+# ------------------------------------------------------------
+# Firewall
+# ------------------------------------------------------------
 
-setup_redis() {
+setup_firewall() {
+    step "Firewall"
 
-    step "Configuring Redis"
+    if ! ask_yes_no "Configure UFW automatically?" "Y"; then
+        warn "Firewall configuration skipped."
+        return
+    fi
 
-    systemctl enable --now redis-server
+    apt_install ufw
 
-    if systemctl is-active --quiet redis-server; then
-        success "Redis is running"
+    ufw allow 22/tcp >/dev/null
+    ufw allow 80/tcp >/dev/null
+    ufw allow 443/tcp >/dev/null
+
+    if ask_yes_no "Enable UFW now?" "Y"; then
+        ufw --force enable >/dev/null
+        success "UFW enabled."
     else
-        die "Redis failed to start."
+        warn "UFW installed but not enabled."
     fi
 }
 
-# ============================================================
-# DOCKER
-# ============================================================
-
-install_docker() {
-
-    step "Installing Docker"
-
-    if command_exists docker; then
-
-        success "Docker already installed"
-
-    else
-
-        curl -fsSL https://get.docker.com \
-            | sh
-
-        success "Docker installed"
-
-    fi
-
-    systemctl enable --now docker
-
-    if ! systemctl is-active --quiet docker; then
-        die "Docker failed to start."
-    fi
-
-    success "Docker is running"
-}
-
-# ============================================================
-# PANEL DOWNLOAD
-# ============================================================
+# ------------------------------------------------------------
+# Download Panel
+# ------------------------------------------------------------
 
 download_panel() {
-
-    step "Downloading Pterodactyl Panel"
+    step "Downloading Pterodactyl"
 
     mkdir -p "$PANEL_DIR"
 
-    cd "$PANEL_DIR"
+    cd "$PANEL_DIR" || die "Unable to enter $PANEL_DIR"
 
-    if [[ -f .env ]]; then
-
-        cp .env /tmp/pterodactyl-env-backup
-
+    if [[ -f artisan ]]; then
+        warn "Existing Pterodactyl installation detected."
+        return
     fi
 
-    rm -f panel.tar.gz
+    info "Downloading latest Pterodactyl release..."
 
     curl -fL \
-        --connect-timeout 10 \
-        --max-time 300 \
+        "$PANEL_URL" \
         -o panel.tar.gz \
-        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+        || die "Unable to download Pterodactyl."
 
-    tar -xzf panel.tar.gz
+    tar -xzf panel.tar.gz \
+        || die "Unable to extract Pterodactyl."
 
     rm -f panel.tar.gz
 
     chmod -R 755 storage bootstrap/cache
 
-    success "Pterodactyl Panel downloaded"
+    success "Pterodactyl downloaded."
 }
 
-# ============================================================
-# PANEL ENV
-# ============================================================
+# ------------------------------------------------------------
+# Environment
+# ------------------------------------------------------------
 
-configure_panel_env() {
+configure_environment() {
+    step "Configuring Panel"
 
-    step "Configuring Pterodactyl"
+    cd "$PANEL_DIR" || die "Unable to enter panel directory."
 
-    cd "$PANEL_DIR"
+    cp -n .env.example .env
 
-    cp .env.example .env
+    php artisan key:generate --force \
+        >>"$LOG_FILE" 2>&1 || die "Unable to generate application key."
 
-    APP_URL="https://${PANEL_DOMAIN}"
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        APP_URL="https://$PANEL_DOMAIN"
+    else
+        SERVER_IP="$(hostname -I | awk '{print $1}')"
+        APP_URL="http://$SERVER_IP"
+    fi
 
-    php artisan key:generate --force
+    if [[ -z "$DB_NAME" ]]; then
+        DB_NAME="panel"
+    fi
 
-    sed -i \
-        "s|^APP_URL=.*|APP_URL=${APP_URL}|" \
-        .env
+    if [[ -z "$DB_USER" ]]; then
+        DB_USER="pterodactyl"
+    fi
 
-    sed -i \
-        "s|^DB_CONNECTION=.*|DB_CONNECTION=mysql|" \
-        .env
+    if [[ -z "$DB_PASSWORD" ]]; then
+        DB_PASSWORD=""
+    fi
 
-    sed -i \
-        "s|^DB_HOST=.*|DB_HOST=127.0.0.1|" \
-        .env
+    php artisan p:environment:setup \
+        --author="admin@example.com" \
+        --url="$APP_URL" \
+        --timezone="UTC" \
+        --cache="redis" \
+        --session="database" \
+        --queue="redis" \
+        --redis-host="127.0.0.1" \
+        --redis-pass="" \
+        --redis-port="6379" \
+        --no-interaction \
+        >>"$LOG_FILE" 2>&1 || true
 
-    sed -i \
-        "s|^DB_PORT=.*|DB_PORT=3306|" \
-        .env
+    php artisan p:environment:database \
+        --host="127.0.0.1" \
+        --port="3306" \
+        --database="$DB_NAME" \
+        --username="$DB_USER" \
+        --password="$DB_PASSWORD" \
+        --no-interaction \
+        >>"$LOG_FILE" 2>&1 || true
 
-    sed -i \
-        "s|^DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|" \
-        .env
+    # Make sure important values exist.
+    sed -i "s|^APP_URL=.*|APP_URL=$APP_URL|" .env
 
-    sed -i \
-        "s|^DB_USERNAME=.*|DB_USERNAME=${DB_USER}|" \
-        .env
+    sed -i "s|^DB_HOST=.*|DB_HOST=127.0.0.1|" .env
+    sed -i "s|^DB_PORT=.*|DB_PORT=3306|" .env
+    sed -i "s|^DB_DATABASE=.*|DB_DATABASE=$DB_NAME|" .env
+    sed -i "s|^DB_USERNAME=.*|DB_USERNAME=$DB_USER|" .env
 
-    sed -i \
-        "s|^DB_PASSWORD=.*|DB_PASSWORD=${DB_PASSWORD}|" \
-        .env
+    if grep -q "^DB_PASSWORD=" .env; then
+        sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" .env
+    else
+        echo "DB_PASSWORD=$DB_PASSWORD" >> .env
+    fi
 
-    sed -i \
-        "s|^CACHE_STORE=.*|CACHE_STORE=redis|" \
-        .env || true
-
-    sed -i \
-        "s|^SESSION_DRIVER=.*|SESSION_DRIVER=redis|" \
-        .env
-
-    sed -i \
-        "s|^QUEUE_CONNECTION=.*|QUEUE_CONNECTION=redis|" \
-        .env
-
-    sed -i \
-        "s|^REDIS_HOST=.*|REDIS_HOST=127.0.0.1|" \
-        .env
-
-    sed -i \
-        "s|^REDIS_PORT=.*|REDIS_PORT=6379|" \
-        .env
-
-    sed -i \
-        "s|^MAIL_MAILER=.*|MAIL_MAILER=log|" \
-        .env
-
-    success "Panel environment configured"
+    success "Panel environment configured."
 }
 
-# ============================================================
-# COMPOSER PANEL
-# ============================================================
+# ------------------------------------------------------------
+# Composer dependencies
+# ------------------------------------------------------------
 
 install_panel_dependencies() {
+    step "Installing Panel Dependencies"
 
-    step "Installing Panel Composer Dependencies"
+    cd "$PANEL_DIR" || die "Unable to enter panel directory."
 
-    cd "$PANEL_DIR"
-
-    COMPOSER_ALLOW_SUPERUSER=1 \
-        composer install \
+    composer install \
         --no-dev \
         --optimize-autoloader \
-        --no-interaction
+        --no-interaction \
+        >>"$LOG_FILE" 2>&1 \
+        || die "Composer installation failed."
 
-    success "Panel dependencies installed"
+    success "Panel dependencies installed."
 }
 
-# ============================================================
-# MIGRATION
-# ============================================================
+# ------------------------------------------------------------
+# Database migrations
+# ------------------------------------------------------------
 
 migrate_database() {
+    step "Migrating Database"
 
-    step "Creating Pterodactyl Database Tables"
+    cd "$PANEL_DIR" || die "Unable to enter panel directory."
 
-    cd "$PANEL_DIR"
+    php artisan migrate --seed --force \
+        >>"$LOG_FILE" 2>&1 \
+        || die "Database migration failed."
 
-    php artisan migrate \
-        --seed \
-        --force
-
-    success "Database migration completed"
+    success "Database migration completed."
 }
 
-# ============================================================
-# ADMIN USER
-# ============================================================
+# ------------------------------------------------------------
+# Admin user
+# ------------------------------------------------------------
 
 create_admin() {
-
-    step "Create Pterodactyl Administrator"
-
-    cd "$PANEL_DIR"
+    step "Administrator Account"
 
     echo
-    echo "The official Pterodactyl administrator wizard will now open."
-    echo "Enter the administrator details when prompted."
+    echo "You can create the first administrator now."
+    echo "You may also skip this and run:"
+    echo
+    echo "  cd $PANEL_DIR"
+    echo "  php artisan p:user:make"
     echo
 
-    php artisan p:user:make
+    if ask_yes_no "Create administrator now?" "Y"; then
+        cd "$PANEL_DIR" || return
 
-    success "Administrator creation completed"
+        php artisan p:user:make
+    else
+        warn "Administrator creation skipped."
+    fi
 }
 
-# ============================================================
-# PERMISSIONS
-# ============================================================
-
-set_panel_permissions() {
-
-    step "Setting Panel Permissions"
-
-    chown -R www-data:www-data "$PANEL_DIR"
-
-    chmod -R 755 \
-        "$PANEL_DIR/storage" \
-        "$PANEL_DIR/bootstrap/cache"
-
-    success "Panel permissions configured"
-}
-
-# ============================================================
-# NGINX
-# ============================================================
+# ------------------------------------------------------------
+# Nginx
+# ------------------------------------------------------------
 
 configure_nginx() {
-
     step "Configuring Nginx"
+
+    rm -f /etc/nginx/sites-enabled/default
+
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        SERVER_NAME="$PANEL_DOMAIN"
+    else
+        SERVER_NAME="_"
+    fi
+
+    PHP_SOCKET="/run/php/php8.3-fpm.sock"
 
     cat > /etc/nginx/sites-available/pterodactyl.conf <<EOF
 server {
     listen 80;
     listen [::]:80;
 
-    server_name ${PANEL_DOMAIN};
+    server_name $SERVER_NAME;
 
-    root ${PANEL_DIR}/public;
+    root $PANEL_DIR/public;
+
     index index.php;
+
+    client_max_body_size 100m;
 
     access_log /var/log/nginx/pterodactyl_access.log;
     error_log /var/log/nginx/pterodactyl_error.log;
-
-    client_max_body_size 100m;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
     location ~ \.php$ {
-        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
-
-        fastcgi_index index.php;
-        include fastcgi_params;
-
-        fastcgi_param PHP_VALUE "upload_max_filesize=100M \n post_max_size=100M";
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_param HTTP_PROXY "";
-        fastcgi_param HTTP_AUTHORIZATION \$http_authorization;
-        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:$PHP_SOCKET;
     }
 
     location ~ /\.ht {
@@ -704,29 +702,30 @@ server {
 }
 EOF
 
-    ln -sf \
+    ln -sfn \
         /etc/nginx/sites-available/pterodactyl.conf \
         /etc/nginx/sites-enabled/pterodactyl.conf
 
-    rm -f /etc/nginx/sites-enabled/default
+    nginx -t || die "Nginx configuration test failed."
 
-    nginx -t
+    systemctl enable nginx
+    systemctl restart nginx
 
-    systemctl enable --now nginx
-    systemctl reload nginx
+    if ! systemctl is-active --quiet nginx; then
+        die "Nginx failed to start."
+    fi
 
-    success "Nginx configured"
+    success "Nginx configured."
 }
 
-# ============================================================
-# QUEUE WORKER
-# ============================================================
+# ------------------------------------------------------------
+# Queue worker
+# ------------------------------------------------------------
 
-configure_queue_worker() {
+configure_queue() {
+    step "Configuring Queue Worker"
 
-    step "Configuring Pterodactyl Queue Worker"
-
-    cat > /etc/systemd/system/pterodactyl-worker.service <<EOF
+    cat > /etc/systemd/system/pteroq.service <<EOF
 [Unit]
 Description=Pterodactyl Queue Worker
 After=redis-server.service
@@ -736,172 +735,192 @@ Requires=redis-server.service
 User=www-data
 Group=www-data
 Restart=always
-RestartSec=5
-WorkingDirectory=${PANEL_DIR}
-ExecStart=/usr/bin/php ${PANEL_DIR}/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
+ExecStart=/usr/bin/php $PANEL_DIR/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
 StartLimitInterval=180
 StartLimitBurst=30
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable --now pterodactyl-worker
+    systemctl enable --now pteroq
 
-    success "Queue worker configured"
+    if systemctl is-active --quiet pteroq; then
+        success "Queue worker running."
+    else
+        warn "Queue worker failed to start."
+    fi
 }
 
-# ============================================================
-# CRON
-# ============================================================
+# ------------------------------------------------------------
+# Cron
+# ------------------------------------------------------------
 
 configure_cron() {
+    step "Configuring Scheduler"
 
-    step "Configuring Pterodactyl Scheduler"
+    cat > /etc/cron.d/pterodactyl <<EOF
+* * * * * www-data php $PANEL_DIR/artisan schedule:run >> /dev/null 2>&1
+EOF
 
-    local CRON_LINE="* * * * * php ${PANEL_DIR}/artisan schedule:run >> /dev/null 2>&1"
+    chmod 644 /etc/cron.d/pterodactyl
 
-    crontab -u www-data -l 2>/dev/null \
-        | grep -Fv "${PANEL_DIR}/artisan schedule:run" \
-        > /tmp/ptero-cron 2>/dev/null || true
+    systemctl restart cron 2>/dev/null || true
 
-    echo "$CRON_LINE" >> /tmp/ptero-cron
-
-    crontab -u www-data /tmp/ptero-cron
-
-    rm -f /tmp/ptero-cron
-
-    systemctl enable --now cron
-
-    success "Scheduler configured"
+    success "Cron configured."
 }
 
-# ============================================================
+# ------------------------------------------------------------
+# Permissions
+# ------------------------------------------------------------
+
+fix_permissions() {
+    step "Setting Permissions"
+
+    chown -R www-data:www-data "$PANEL_DIR"
+
+    chmod -R 755 "$PANEL_DIR/storage"
+    chmod -R 755 "$PANEL_DIR/bootstrap/cache"
+
+    success "Permissions fixed."
+}
+
+# ------------------------------------------------------------
 # SSL
-# ============================================================
+# ------------------------------------------------------------
 
 install_ssl() {
-
-    step "Installing SSL Certificate"
-
-    if ! command_exists certbot; then
-
-        apt_install certbot python3-certbot-nginx
-
-    fi
-
-    echo
-    echo "Requesting Let's Encrypt certificate for:"
-    echo "https://${PANEL_DOMAIN}"
-    echo
-
-    certbot --nginx \
-        -d "$PANEL_DOMAIN" \
-        --non-interactive \
-        --agree-tos \
-        --register-unsafely-without-email \
-        --redirect
-
-    systemctl reload nginx
-
-    success "SSL configured"
-}
-
-# ============================================================
-# FULL PANEL INSTALL
-# ============================================================
-
-install_panel() {
-
-    clear
-
-    check_os
-    check_internet
-    get_public_ip
-
-    step "Panel Domain Setup"
-
-    echo
-    read -r -p "Enter Panel Domain: " PANEL_DOMAIN
+    step "SSL / Certbot"
 
     if [[ -z "$PANEL_DOMAIN" ]]; then
-        die "Panel domain cannot be empty."
+        warn "No domain configured."
+        warn "SSL skipped."
+        return
     fi
 
-    if ! check_domain_dns "$PANEL_DOMAIN"; then
-        die "Domain verification failed. Installation stopped."
+    if ! check_dns; then
+        warn "DNS check failed."
+        warn "Certbot will NOT be executed."
+        return
     fi
 
-    check_ports
+    if ! ask_yes_no "Install Let's Encrypt SSL automatically?" "Y"; then
+        warn "SSL installation skipped."
+        return
+    fi
+
+    apt_install certbot python3-certbot-nginx
+
+    if ! command_exists certbot; then
+        error "Certbot is not installed."
+        return
+    fi
 
     echo
-    read -r -p "Continue with Pterodactyl Panel installation? [y/N]: " confirm
+    read -r -p "Let's Encrypt email: " CERTBOT_EMAIL
 
-    case "$confirm" in
-        y|Y|yes|YES)
-            ;;
-        *)
-            echo "Installation cancelled."
-            return
-            ;;
-    esac
+    if [[ -z "$CERTBOT_EMAIL" ]]; then
+        warn "No email supplied."
+        warn "SSL skipped."
+        return
+    fi
+
+    info "Requesting certificate..."
+
+    if certbot --nginx \
+        -d "$PANEL_DOMAIN" \
+        --email "$CERTBOT_EMAIL" \
+        --agree-tos \
+        --no-eff-email \
+        --redirect \
+        --non-interactive; then
+
+        success "SSL certificate installed."
+        success "HTTPS enabled."
+    else
+        error "Certbot failed."
+        echo
+        echo "Useful commands:"
+        echo "  certbot certificates"
+        echo "  tail -100 /var/log/letsencrypt/letsencrypt.log"
+        echo
+    fi
+}
+
+# ------------------------------------------------------------
+# Full Panel installation
+# ------------------------------------------------------------
+
+install_panel() {
+    banner
+
+    detect_os
+    check_internet
+    apt_update
+
+    configure_domain
 
     install_dependencies
     install_composer
+
     setup_database
-    setup_redis
+    setup_firewall
+
     download_panel
-    configure_panel_env
+    configure_environment
     install_panel_dependencies
     migrate_database
+
     create_admin
-    set_panel_permissions
+
+    fix_permissions
     configure_nginx
-    configure_queue_worker
+    configure_queue
     configure_cron
 
-    echo
-    read -r -p "Install Let's Encrypt SSL now? [Y/n]: " ssl_answer
+    install_ssl
 
-    case "$ssl_answer" in
-        n|N|no|NO)
-            warn "SSL skipped."
-            ;;
-        *)
-            install_ssl
-            ;;
-    esac
-
-    success "Pterodactyl Panel installation completed."
+    success "Pterodactyl Panel installation finished."
 
     echo
-    echo "Panel:"
-    echo "https://${PANEL_DOMAIN}"
+    echo -e "${WHITE}Panel:${NC}"
+
+    if [[ -n "$PANEL_DOMAIN" ]]; then
+        echo "https://$PANEL_DOMAIN"
+    else
+        echo "http://$(hostname -I | awk '{print $1}')"
+    fi
+
     echo
-    echo "Panel directory:"
-    echo "$PANEL_DIR"
-    echo
-    echo "Installer log:"
+    echo -e "${WHITE}Log:${NC}"
     echo "$LOG_FILE"
 
     pause
 }
 
-# ============================================================
-# WINGS
-# ============================================================
+# ------------------------------------------------------------
+# Wings
+# ------------------------------------------------------------
 
 install_wings() {
-
-    clear
-
-    check_os
-    check_internet
+    banner
 
     step "Installing Pterodactyl Wings"
 
-    install_docker
+    detect_os
+    check_internet
+
+    if ! command_exists docker; then
+        info "Installing Docker..."
+
+        curl -fsSL https://get.docker.com | sh \
+            >>"$LOG_FILE" 2>&1 \
+            || die "Docker installation failed."
+    fi
+
+    systemctl enable --now docker
 
     mkdir -p /etc/pterodactyl
 
@@ -915,19 +934,18 @@ install_wings() {
             WINGS_ARCH="arm64"
             ;;
         *)
-            die "Unsupported CPU architecture: $ARCH"
+            die "Unsupported CPU architecture."
             ;;
     esac
 
-    msg "Downloading Wings for ${WINGS_ARCH}..."
+    info "Downloading Wings..."
 
     curl -fL \
-        --connect-timeout 10 \
-        --max-time 300 \
+        "${WINGS_URL}_${WINGS_ARCH}" \
         -o /usr/local/bin/wings \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${WINGS_ARCH}"
+        || die "Wings download failed."
 
-    chmod u+x /usr/local/bin/wings
+    chmod +x /usr/local/bin/wings
 
     cat > /etc/systemd/system/wings.service <<EOF
 [Unit]
@@ -956,140 +974,120 @@ EOF
     success "Wings installed."
 
     echo
-    echo "IMPORTANT:"
+    echo "Wings configuration is generated from your Panel."
     echo
-    echo "Create your Node in Pterodactyl Panel."
+    echo "Panel → Admin → Nodes → Create Node"
+    echo "Then open the node → Configuration."
     echo
-    echo "Then copy the generated configuration to:"
+    echo "Paste the generated configuration into:"
     echo
     echo "/etc/pterodactyl/config.yml"
     echo
-    echo "After that run:"
-    echo
-    echo "systemctl enable --now wings"
-    echo
 
     if [[ -f /etc/pterodactyl/config.yml ]]; then
-
         systemctl enable --now wings
 
         if systemctl is-active --quiet wings; then
-            success "Wings started successfully."
+            success "Wings started."
         else
-            warn "Wings did not start. Check: journalctl -u wings -n 100"
+            warn "Wings configuration exists but Wings did not start."
         fi
-
     else
-
-        warn "No Wings config found yet. Wings was installed but not started."
-
+        warn "Wings has NOT been started because config.yml does not exist."
     fi
 
     pause
 }
 
-# ============================================================
-# UPDATE PANEL
-# ============================================================
+# ------------------------------------------------------------
+# Panel + Wings
+# ------------------------------------------------------------
+
+install_both() {
+    install_panel
+    install_wings
+}
+
+# ------------------------------------------------------------
+# Update Panel
+# ------------------------------------------------------------
 
 update_panel() {
+    banner
 
-    clear
+    step "Update Pterodactyl Panel"
 
-    if [[ ! -d "$PANEL_DIR" ]]; then
-        die "Pterodactyl Panel is not installed."
+    if [[ ! -f "$PANEL_DIR/artisan" ]]; then
+        error "Pterodactyl is not installed."
+        pause
+        return
     fi
 
-    step "Backing Up Before Panel Update"
+    cd "$PANEL_DIR" || return
 
-    mkdir -p "$BACKUP_DIR"
+    php artisan down || true
 
-    TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-
-    tar -czf \
-        "$BACKUP_DIR/panel-before-update-${TIMESTAMP}.tar.gz" \
-        "$PANEL_DIR/.env" \
-        "$PANEL_DIR/storage" \
+    cp .env "/root/pterodactyl-env-backup-$(date +%Y%m%d-%H%M%S)" \
         2>/dev/null || true
 
-    if command_exists mariadb-dump; then
-
-        mariadb-dump \
-            --single-transaction \
-            panel \
-            > "$BACKUP_DIR/database-before-update-${TIMESTAMP}.sql"
-
-    fi
-
-    success "Backup created"
-
-    step "Updating Pterodactyl Panel"
-
-    cd "$PANEL_DIR"
-
-    cp .env /tmp/pterodactyl-env-update
+    info "Downloading latest Panel..."
 
     curl -fL \
-        --connect-timeout 10 \
-        --max-time 300 \
-        -o /tmp/panel.tar.gz \
-        https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+        "$PANEL_URL" \
+        -o panel.tar.gz \
+        || {
+            php artisan up || true
+            error "Panel download failed."
+            pause
+            return
+        }
 
-    rm -rf /tmp/pterodactyl-panel-update
+    tar -xzf panel.tar.gz
+    rm -f panel.tar.gz
 
-    mkdir -p /tmp/pterodactyl-panel-update
+    chmod -R 755 storage bootstrap/cache
 
-    tar -xzf \
-        /tmp/panel.tar.gz \
-        -C /tmp/pterodactyl-panel-update
-
-    cp -a \
-        /tmp/pterodactyl-panel-update/. \
-        "$PANEL_DIR/"
-
-    cp \
-        /tmp/pterodactyl-env-update \
-        "$PANEL_DIR/.env"
-
-    rm -rf \
-        /tmp/panel.tar.gz \
-        /tmp/pterodactyl-panel-update \
-        /tmp/pterodactyl-env-update
-
-    cd "$PANEL_DIR"
-
-    COMPOSER_ALLOW_SUPERUSER=1 \
-        composer install \
+    composer install \
         --no-dev \
         --optimize-autoloader \
-        --no-interaction
+        --no-interaction \
+        >>"$LOG_FILE" 2>&1 \
+        || warn "Composer update reported an error."
 
-    php artisan migrate --seed --force
+    php artisan migrate --seed --force \
+        >>"$LOG_FILE" 2>&1 \
+        || warn "Database migration reported an error."
 
-    php artisan optimize:clear
+    php artisan view:clear >>"$LOG_FILE" 2>&1 || true
+    php artisan config:clear >>"$LOG_FILE" 2>&1 || true
+    php artisan cache:clear >>"$LOG_FILE" 2>&1 || true
 
-    set_panel_permissions
+    chown -R www-data:www-data "$PANEL_DIR"
 
-    systemctl restart pterodactyl-worker
-    systemctl reload nginx
+    systemctl restart php8.3-fpm
+    systemctl restart nginx
+    systemctl restart pteroq
 
-    success "Panel updated successfully."
+    php artisan up || true
+
+    success "Panel update completed."
 
     pause
 }
 
-# ============================================================
-# UPDATE WINGS
-# ============================================================
+# ------------------------------------------------------------
+# Update Wings
+# ------------------------------------------------------------
 
 update_wings() {
+    banner
 
-    clear
-
-    step "Updating Wings"
+    step "Update Wings"
 
     if [[ ! -f /usr/local/bin/wings ]]; then
-        die "Wings is not installed."
+        error "Wings is not installed."
+        pause
+        return
     fi
 
     systemctl stop wings 2>/dev/null || true
@@ -1104,215 +1102,200 @@ update_wings() {
             WINGS_ARCH="arm64"
             ;;
         *)
-            die "Unsupported CPU architecture."
+            error "Unsupported architecture."
+            pause
+            return
             ;;
     esac
 
     curl -fL \
-        --connect-timeout 10 \
-        --max-time 300 \
-        -o /usr/local/bin/wings.new \
-        "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_${WINGS_ARCH}"
+        "${WINGS_URL}_${WINGS_ARCH}" \
+        -o /usr/local/bin/wings \
+        || {
+            error "Wings download failed."
+            systemctl start wings 2>/dev/null || true
+            pause
+            return
+        }
 
-    chmod u+x /usr/local/bin/wings.new
-
-    mv \
-        /usr/local/bin/wings.new \
-        /usr/local/bin/wings
+    chmod +x /usr/local/bin/wings
 
     systemctl daemon-reload
-    systemctl start wings
+    systemctl enable --now wings
 
-    success "Wings updated."
+    if systemctl is-active --quiet wings; then
+        success "Wings updated."
+    else
+        warn "Wings is not running."
+    fi
 
     pause
 }
 
-# ============================================================
-# BACKUP
-# ============================================================
+# ------------------------------------------------------------
+# Backup
+# ------------------------------------------------------------
 
 backup_panel() {
+    banner
 
-    clear
+    step "Panel Backup"
 
-    step "Creating Panel Backup"
-
-    if [[ ! -d "$PANEL_DIR" ]]; then
-        die "Pterodactyl Panel is not installed."
-    fi
+    BACKUP_DIR="/root/pterodactyl-backups/$(date +%Y-%m-%d_%H-%M-%S)"
 
     mkdir -p "$BACKUP_DIR"
 
-    TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+    info "Backing up .env..."
 
-    tar -czf \
-        "$BACKUP_DIR/panel-${TIMESTAMP}.tar.gz" \
-        "$PANEL_DIR/.env" \
-        "$PANEL_DIR/storage"
+    cp "$PANEL_DIR/.env" "$BACKUP_DIR/.env"
 
-    if command_exists mariadb-dump; then
+    info "Backing up database..."
 
-        mariadb-dump \
-            --single-transaction \
-            panel \
-            > "$BACKUP_DIR/database-${TIMESTAMP}.sql"
+    DB_NAME="$(grep '^DB_DATABASE=' "$PANEL_DIR/.env" | cut -d= -f2-)"
+    DB_USER="$(grep '^DB_USERNAME=' "$PANEL_DIR/.env" | cut -d= -f2-)"
+    DB_PASSWORD="$(grep '^DB_PASSWORD=' "$PANEL_DIR/.env" | cut -d= -f2-)"
 
+    if [[ -n "$DB_NAME" ]]; then
+        MYSQL_PWD="$DB_PASSWORD" mysqldump \
+            -u"$DB_USER" \
+            -h127.0.0.1 \
+            "$DB_NAME" \
+            > "$BACKUP_DIR/database.sql" \
+            2>>"$LOG_FILE" \
+            || warn "Database backup failed."
     fi
 
-    success "Backup completed."
+    info "Backing up Panel files..."
 
-    echo
-    echo "Backup directory:"
+    tar -czf "$BACKUP_DIR/panel-files.tar.gz" \
+        -C /var/www pterodactyl \
+        2>>"$LOG_FILE" \
+        || warn "Panel file backup failed."
+
+    success "Backup created:"
     echo "$BACKUP_DIR"
 
     pause
 }
 
-# ============================================================
-# REPAIR
-# ============================================================
+# ------------------------------------------------------------
+# Repair
+# ------------------------------------------------------------
 
 repair_panel() {
+    banner
 
-    clear
+    step "Repairing Pterodactyl"
 
-    step "Repairing Pterodactyl Panel"
-
-    if [[ ! -d "$PANEL_DIR" ]]; then
-        die "Panel is not installed."
+    if [[ ! -f "$PANEL_DIR/artisan" ]]; then
+        error "Pterodactyl is not installed."
+        pause
+        return
     fi
 
-    cd "$PANEL_DIR"
+    cd "$PANEL_DIR" || return
 
-    php artisan optimize:clear
-
-    chmod -R 755 \
-        storage \
-        bootstrap/cache
-
+    info "Fixing permissions..."
     chown -R www-data:www-data "$PANEL_DIR"
 
-    systemctl restart redis-server
-    systemctl restart pterodactyl-worker
-    systemctl reload nginx
+    chmod -R 755 storage bootstrap/cache
 
-    success "Panel repair completed."
+    info "Installing dependencies..."
+
+    composer install \
+        --no-dev \
+        --optimize-autoloader \
+        --no-interaction \
+        >>"$LOG_FILE" 2>&1 \
+        || warn "Composer reported an error."
+
+    info "Clearing cache..."
+
+    php artisan optimize:clear \
+        >>"$LOG_FILE" 2>&1 \
+        || true
+
+    info "Restarting services..."
+
+    systemctl restart php8.3-fpm
+    systemctl restart nginx
+    systemctl restart redis-server
+    systemctl restart pteroq 2>/dev/null || true
+
+    nginx -t \
+        && success "Nginx configuration valid." \
+        || error "Nginx configuration invalid."
+
+    success "Repair completed."
 
     pause
 }
 
-# ============================================================
-# SSL MANAGER
-# ============================================================
+# ------------------------------------------------------------
+# SSL Manager
+# ------------------------------------------------------------
 
 ssl_manager() {
-
-    clear
+    banner
 
     step "SSL Manager"
 
-    read -r -p "Enter domain: " SSL_DOMAIN
-
-    if ! validate_domain_format "$SSL_DOMAIN"; then
-        die "Invalid domain."
+    if ! command_exists certbot; then
+        info "Installing Certbot..."
+        apt_install certbot python3-certbot-nginx
     fi
-
-    get_public_ip
-
-    if ! check_domain_dns "$SSL_DOMAIN"; then
-        die "Domain verification failed."
-    fi
-
-    apt_install certbot python3-certbot-nginx
-
-    certbot --nginx \
-        -d "$SSL_DOMAIN" \
-        --non-interactive \
-        --agree-tos \
-        --register-unsafely-without-email \
-        --redirect
-
-    systemctl reload nginx
-
-    success "SSL certificate configured."
-
-    pause
-}
-
-# ============================================================
-# SERVICE STATUS
-# ============================================================
-
-service_status() {
-
-    clear
-
-    step "Pterodactyl Service Status"
-
-    services=(
-        nginx
-        mariadb
-        redis-server
-        docker
-        pterodactyl-worker
-        wings
-    )
-
-    for service in "${services[@]}"; do
-
-        if systemctl is-active --quiet "$service" 2>/dev/null; then
-            echo -e "${GREEN}[RUNNING]${NC} $service"
-        else
-            echo -e "${RED}[STOPPED]${NC} $service"
-        fi
-
-    done
-
-    pause
-}
-
-# ============================================================
-# LOGS
-# ============================================================
-
-view_logs() {
-
-    clear
-
-    step "View Logs"
 
     echo
-    echo "1) Installer Log"
-    echo "2) Wings Log"
-    echo "3) Panel Worker Log"
-    echo "4) Panel Application Logs"
+    echo "1) Install SSL"
+    echo "2) Renew SSL"
+    echo "3) List certificates"
+    echo "4) Remove certificate"
     echo "5) Back"
     echo
 
-    read -r -p "Select [1-5]: " log_choice
+    read -r -p "Select: " ssl_choice
 
-    case "$log_choice" in
-
+    case "$ssl_choice" in
         1)
-            less "$LOG_FILE"
+            read -r -p "Domain: " domain
+            read -r -p "Email: " email
+
+            if [[ -z "$domain" || -z "$email" ]]; then
+                error "Domain and email are required."
+                pause
+                return
+            fi
+
+            PANEL_DOMAIN="$domain"
+
+            if check_dns; then
+                certbot --nginx \
+                    -d "$domain" \
+                    --email "$email" \
+                    --agree-tos \
+                    --no-eff-email \
+                    --redirect \
+                    --non-interactive
+            else
+                error "DNS does not point to this server."
+            fi
             ;;
 
         2)
-            journalctl -u wings -n 150 --no-pager
+            certbot renew
             ;;
 
         3)
-            journalctl -u pterodactyl-worker -n 150 --no-pager
+            certbot certificates
             ;;
 
         4)
-            if [[ -d "$PANEL_DIR/storage/logs" ]]; then
-                ls -lah "$PANEL_DIR/storage/logs"
-                echo
-                tail -n 150 "$PANEL_DIR"/storage/logs/*.log 2>/dev/null || true
-            else
-                warn "Panel logs not found."
+            certbot certificates
+            echo
+            read -r -p "Certificate name/domain to remove: " domain
+
+            if [[ -n "$domain" ]]; then
+                certbot delete --cert-name "$domain"
             fi
             ;;
 
@@ -1323,189 +1306,197 @@ view_logs() {
         *)
             error "Invalid option."
             ;;
-
     esac
 
     pause
 }
 
-# ============================================================
-# UNINSTALL
-# ============================================================
+# ------------------------------------------------------------
+# Status
+# ------------------------------------------------------------
 
-uninstall_pterodactyl() {
+service_status() {
+    banner
 
-    clear
+    step "Service Status"
 
-    step "Uninstall / Remove"
+    services=(
+        nginx
+        mariadb
+        redis-server
+        php8.3-fpm
+        pteroq
+        docker
+        wings
+    )
 
-    echo -e "${RED}WARNING${NC}"
+    for service in "${services[@]}"; do
+        if systemctl list-unit-files "$service.service" >/dev/null 2>&1; then
+            if systemctl is-active --quiet "$service"; then
+                echo -e "${GREEN}[ONLINE]${NC} $service"
+            else
+                echo -e "${RED}[OFFLINE]${NC} $service"
+            fi
+        fi
+    done
+
     echo
-    echo "This can remove Pterodactyl Panel and/or Wings."
-    echo
-    echo "Create a backup before continuing."
-    echo
 
-    read -r -p "Type REMOVE to continue: " confirm
-
-    if [[ "$confirm" != "REMOVE" ]]; then
-        echo "Cancelled."
-        return
+    if [[ -f "$PANEL_DIR/artisan" ]]; then
+        success "Pterodactyl Panel files detected."
+    else
+        warn "Pterodactyl Panel not detected."
     fi
 
+    if [[ -f /usr/local/bin/wings ]]; then
+        success "Wings binary detected."
+    else
+        warn "Wings binary not detected."
+    fi
+
+    pause
+}
+
+# ------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------
+
+view_logs() {
+    banner
+
+    step "Logs"
+
     echo
-    echo "1) Remove Panel"
-    echo "2) Remove Wings"
-    echo "3) Remove Panel + Wings"
-    echo "4) Cancel"
+    echo "1) Installer log"
+    echo "2) Queue worker"
+    echo "3) Wings"
+    echo "4) Nginx error"
+    echo "5) Laravel log"
+    echo "6) Back"
     echo
 
-    read -r -p "Select [1-4]: " choice
+    read -r -p "Select: " log_choice
 
-    case "$choice" in
-
+    case "$log_choice" in
         1)
-
-            systemctl disable --now pterodactyl-worker 2>/dev/null || true
-
-            rm -f \
-                /etc/systemd/system/pterodactyl-worker.service
-
-            rm -f \
-                /etc/nginx/sites-enabled/pterodactyl.conf \
-                /etc/nginx/sites-available/pterodactyl.conf
-
-            rm -rf "$PANEL_DIR"
-
-            systemctl daemon-reload
-            nginx -t && systemctl reload nginx || true
-
-            success "Panel removed."
-
+            less "$LOG_FILE"
             ;;
 
         2)
-
-            systemctl disable --now wings 2>/dev/null || true
-
-            rm -f \
-                /etc/systemd/system/wings.service \
-                /usr/local/bin/wings
-
-            systemctl daemon-reload
-
-            success "Wings removed."
-
+            journalctl -u pteroq -n 100 --no-pager
             ;;
 
         3)
-
-            systemctl disable --now pterodactyl-worker 2>/dev/null || true
-            systemctl disable --now wings 2>/dev/null || true
-
-            rm -f \
-                /etc/systemd/system/pterodactyl-worker.service \
-                /etc/systemd/system/wings.service
-
-            rm -f \
-                /etc/nginx/sites-enabled/pterodactyl.conf \
-                /etc/nginx/sites-available/pterodactyl.conf
-
-            rm -f /usr/local/bin/wings
-
-            rm -rf "$PANEL_DIR"
-
-            systemctl daemon-reload
-
-            nginx -t && systemctl reload nginx || true
-
-            success "Panel and Wings removed."
-
+            journalctl -u wings -n 100 --no-pager
             ;;
 
         4)
+            tail -100 /var/log/nginx/pterodactyl_error.log 2>/dev/null \
+                || echo "Nginx log not found."
+            ;;
+
+        5)
+            if [[ -f "$PANEL_DIR/storage/logs/laravel.log" ]]; then
+                tail -100 "$PANEL_DIR/storage/logs/laravel.log"
+            else
+                echo "Laravel log not found."
+            fi
+            ;;
+
+        6)
             return
             ;;
 
         *)
             error "Invalid option."
             ;;
-
     esac
 
     pause
 }
 
-# ============================================================
-# MENU
-# ============================================================
+# ------------------------------------------------------------
+# Uninstall
+# ------------------------------------------------------------
 
-show_menu() {
+uninstall_ptero() {
+    banner
 
-    clear
-
-    echo -e "${CYAN}"
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║                 MG PTERO INSTALLER                        ║"
-    echo "║             Pterodactyl Deployment Manager                ║"
-    echo "║                    Version ${VERSION}                       ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    step "Uninstall / Remove"
 
     echo
-    echo -e "${WHITE}Installation${NC}"
-    echo "  1) Install Panel"
-    echo "  2) Install Wings"
-    echo "  3) Install Panel + Wings"
+    echo -e "${RED}WARNING${NC}"
+    echo "This can remove Pterodactyl files, services and configuration."
     echo
-    echo -e "${WHITE}Management${NC}"
-    echo "  4) Update Panel"
-    echo "  5) Update Wings"
-    echo "  6) Backup Panel + Database"
-    echo "  7) Repair Panel"
-    echo "  8) SSL Manager"
-    echo "  9) Service Status"
-    echo " 10) View Logs"
+    echo "It will NOT automatically delete Docker containers/data."
     echo
-    echo -e "${RED} 11) Uninstall / Remove${NC}"
-    echo " 12) Exit"
-    echo
+
+    if ! ask_yes_no "Continue with uninstall?" "N"; then
+        return
+    fi
+
+    systemctl disable --now pteroq 2>/dev/null || true
+    systemctl disable --now wings 2>/dev/null || true
+
+    rm -f /etc/systemd/system/pteroq.service
+    rm -f /etc/systemd/system/wings.service
+
+    systemctl daemon-reload
+
+    rm -f /etc/nginx/sites-enabled/pterodactyl.conf
+    rm -f /etc/nginx/sites-available/pterodactyl.conf
+
+    rm -f /etc/cron.d/pterodactyl
+
+    nginx -t >/dev/null 2>&1 && systemctl restart nginx || true
+
+    if ask_yes_no "Remove /var/www/pterodactyl?" "N"; then
+        rm -rf "$PANEL_DIR"
+    fi
+
+    if ask_yes_no "Remove Pterodactyl database?" "N"; then
+        read -r -p "Database name: " db_name
+
+        if [[ -n "$db_name" ]]; then
+            mysql -e "DROP DATABASE IF EXISTS \`$db_name\`;"
+        fi
+    fi
+
+    success "Pterodactyl removal completed."
+
+    pause
 }
 
-# ============================================================
-# COMBINED INSTALL
-# ============================================================
+# ------------------------------------------------------------
+# Main menu
+# ------------------------------------------------------------
 
-install_panel_wings() {
-
-    install_panel
-
-    echo
-    read -r -p "Install Wings on this server now? [Y/n]: " answer
-
-    case "$answer" in
-        n|N|no|NO)
-            return
-            ;;
-        *)
-            install_wings
-            ;;
-    esac
-}
-
-# ============================================================
-# MAIN
-# ============================================================
-
-main() {
-
-    check_root
-
+main_menu() {
     while true; do
 
-        show_menu
+        banner
 
-        read -r -p "Select [1-12]: " choice
+        echo -e "${WHITE}Installation${NC}"
+        echo "  1) Install Panel"
+        echo "  2) Install Wings"
+        echo "  3) Install Panel + Wings"
+        echo
+
+        echo -e "${WHITE}Management${NC}"
+        echo "  4) Update Panel"
+        echo "  5) Update Wings"
+        echo "  6) Backup Panel + Database"
+        echo "  7) Repair Panel"
+        echo "  8) SSL Manager"
+        echo "  9) Service Status"
+        echo " 10) View Logs"
+        echo
+
+        echo -e "${RED} 11) Uninstall / Remove${NC}"
+        echo " 12) Exit"
+        echo
+
+        read -r -p "Select an option [1-12]: " choice
 
         case "$choice" in
 
@@ -1518,7 +1509,7 @@ main() {
                 ;;
 
             3)
-                install_panel_wings
+                install_both
                 ;;
 
             4)
@@ -1550,7 +1541,7 @@ main() {
                 ;;
 
             11)
-                uninstall_pterodactyl
+                uninstall_ptero
                 ;;
 
             12)
@@ -1563,10 +1554,12 @@ main() {
                 error "Invalid option. Choose 1-12."
                 sleep 1
                 ;;
-
         esac
-
     done
 }
 
-main "$@"
+# ------------------------------------------------------------
+# Start
+# ------------------------------------------------------------
+
+main_menu
